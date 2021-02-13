@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/dgraph-io/badger"
 )
 
 func ExampleScrape(url string) []string {
@@ -35,16 +36,19 @@ func ExampleScrape(url string) []string {
 	doc.Find("[href]").Each(func(i int, s *goquery.Selection) {
 		// For each item found, get the band and title
 		attr, _ := s.Attr("href")
-		if attr[0:2] == "//" {
-			ret = append(ret, "http://"+attr[2:])
-		} else if attr[0] == '/' {
-			ret = append(ret, "http://"+url[0:strings.IndexByte(url, '/')]+attr)
-			fmt.Println(ret[len(ret)-1])
+		if len(attr) > 1 {
+			if attr[0:2] == "//" {
+				ret = append(ret, "http://"+attr[2:])
+			} else if attr[0] == '/' && (attr != "/") && strings.ContainsAny(attr, "/") {
+				if strings.IndexByte(url, '/') != -1 {
+					ret = append(ret, "http://"+url[0:strings.IndexByte(url, '/')]+attr)
+				}
+			}
 		}
 	})
 	return ret
 }
-
+func webboi() {}
 func scrape(url string, comms chan map[string]struct{}) {
 	out := make(map[string]struct{})
 	urls := ExampleScrape(url)
@@ -55,34 +59,46 @@ func scrape(url string, comms chan map[string]struct{}) {
 }
 
 func main() {
+	db, err := badger.Open(badger.DefaultOptions("./"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
 	// entry:
 	entry := "http://en.wikipedia.org/wiki/List_of_lists_of_lists"
 	wgsize := 300
-	storage := make(map[string]struct{})
+	// storage := make(map[string]struct{})
 	queue := ExampleScrape(entry)
 	comms := make(chan map[string]struct{})
 	for true {
-		temp := make([]string, 0)
+		temp := make(map[string]struct{})
 		for x := 0; x < wgsize; x++ {
 			go scrape(queue[x], comms)
 		}
 		for x := range queue {
 			thing := <-comms
 			for point := range thing {
-				temp = append(temp, point)
+				temp[point] = struct{}{}
 			}
 			if x+wgsize < len(queue) {
 				go scrape(queue[x+wgsize], comms)
 			}
 		}
 		for _, x := range queue {
-			storage[x] = struct{}{}
+			txn := db.NewTransaction(true)
+			if err := txn.Set([]byte(x), []byte(fmt.Sprintf("%v", struct{}{}))); err == badger.ErrTxnTooBig {
+				_ = txn.Commit()
+				txn = db.NewTransaction(true)
+				_ = txn.Set([]byte(x), []byte(fmt.Sprintf("%v", struct{}{})))
+			}
+			_ = txn.Commit()
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
-
-		queue = temp
-		break
+		queue = make([]string, 0)
+		for x := range temp {
+			queue = append(queue, x)
+		}
 	}
-	print(len(queue))
-	print(len(storage))
-
 }
