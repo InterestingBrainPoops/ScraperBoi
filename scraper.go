@@ -3,9 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -27,27 +30,31 @@ func serveFiles(w http.ResponseWriter, r *http.Request) {
 	// }
 
 	switch r.Method {
-	case "GET":
-		http.ServeFile(w, r, "./html/index.html")
 	case "POST":
 		fmt.Println("reached")
-		request := req{}
-		err := json.NewDecoder(r.Body).Decode(&request)
+		jsn, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("Error reading the body", err)
 		}
-		fmt.Println(request.Qry)
-		response := resp{
+		request := req{}
+		err = json.Unmarshal(jsn, &request)
+		if err != nil {
+			log.Fatal("Decoding err", err)
+		}
+		log.Printf("recieved")
+		res := resp{
 			Query: request.Qry,
 			Out:   getRelevantURLs(request.Qry),
 		}
-
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(response)
-
+		fmt.Println(res)
+		out, err := json.Marshal(res)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Fprintf(w, "Error: %s", err)
 		}
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(out)
+
 	default:
 		fmt.Fprintf(w, "Sorry, only GET and POST methods are supported.")
 	}
@@ -88,6 +95,9 @@ func api() {
 	http.HandleFunc("/", serveFiles)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
+
+var mutex = &sync.Mutex{}
+
 func ExampleScrape(url string) ([]string, bool) {
 	time.Sleep(100 * time.Millisecond)
 	// Request the HTML page.
@@ -103,11 +113,6 @@ func ExampleScrape(url string) ([]string, bool) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		// fmt.Println(res.StatusCode)
-		if res.StatusCode == 429 {
-			// time.Sleep(1 * time.Millisecond)
-			// fmt.Println(url+"", res.StatusCode)
-		}
 		if res.StatusCode == 404 {
 			return nil, false
 		}
@@ -158,7 +163,12 @@ func scrape(url string, comms chan map[string]struct{}) {
 }
 
 func main() {
-
+	f, err := os.OpenFile("testlogfile", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	defer f.Close()
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	log.SetOutput(f)
 	// entry:
 	entry := "http://en.wikipedia.org/wiki/List_of_lists_of_lists"
 	wgsize := 50
@@ -176,6 +186,7 @@ func main() {
 	go api()
 
 	for true {
+		f, err := os.OpenFile("testlogfile", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 		t0 := time.Now()
 		temp := make(map[string]struct{})
 		for x := 0; x < wgsize; x++ {
@@ -191,12 +202,12 @@ func main() {
 				go scrape(queue[x+wgsize], comms)
 			}
 			if x%1000 == 0 {
-				fmt.Println(time.Now().Sub(t0))
+				log.Println(time.Now().Sub(t0))
 			}
 			// fmt.Println(x)
 		}
 
-		fmt.Println("Starting write to db")
+		log.Println("Starting write to db")
 		db, err := badger.Open(badger.DefaultOptions("./db/"))
 		if err != nil {
 			log.Fatal(err)
@@ -218,10 +229,11 @@ func main() {
 		for x := range temp {
 			queue = append(queue, x)
 		}
-		fmt.Println(len(queue))
-		fmt.Println("Finsihed 1 iteration")
+		log.Println(len(queue))
+		log.Println("Finsihed 1 iteration")
 		if err != nil {
 			log.Fatal(err)
 		}
+		f.Close()
 	}
 }
