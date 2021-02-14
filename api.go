@@ -1,5 +1,14 @@
+package gunnhacks
+
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/dgraph-io/badger"
 )
 
 type req struct {
@@ -83,7 +92,8 @@ func api() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 func main() {
-	x := 3
-	x := 3
-	fmt.Println("e")
+	go api()
+	for true {
+
+	}
 }
